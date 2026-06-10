@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ASTS Constellation Tracker — AST SpaceMobile live satellite positions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  :root {
+    --ink: #0e1430;
+    --panel: #151c3d;
+    --panel-edge: #232c5c;
+    --text: #e8ecff;
+    --muted: #8b93b8;
+    --amber: #ffb454;
+    --amber-dim: rgba(255, 180, 84, 0.14);
+    --good: #6fe3a5;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--ink);
+    color: var(--text);
+    font-family: "Space Grotesk", system-ui, sans-serif;
+    min-height: 100vh;
+  }
+  .mono { font-family: "IBM Plex Mono", monospace; }
+
+  header {
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+    padding: 18px 22px 14px;
+    border-bottom: 1px solid var(--panel-edge);
+  }
+  header h1 { font-size: 1.15rem; font-weight: 700; letter-spacing: 0.02em; }
+  header h1 span { color: var(--amber); }
+  header .sub { color: var(--muted); font-size: 0.8rem; }
+  #clock { margin-left: auto; color: var(--muted); font-size: 0.8rem; }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 330px 1fr;
+    gap: 0;
+    height: calc(100vh - 57px);
+  }
+  @media (max-width: 880px) {
+    .layout { grid-template-columns: 1fr; height: auto; }
+    #map { height: 55vh; }
+  }
+
+  /* Telemetry rail — the signature element */
+  .rail {
+    border-right: 1px solid var(--panel-edge);
+    overflow-y: auto;
+    padding: 14px;
+  }
+  .rail h2 {
+    font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.18em;
+    color: var(--muted); margin: 8px 4px 10px;
+  }
+  .sat-card {
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-left: 3px solid var(--sat-color, var(--amber));
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    cursor: pointer;
+    transition: border-color 0.15s ease, transform 0.15s ease;
+  }
+  .sat-card:hover, .sat-card:focus-visible { border-color: var(--amber); outline: none; }
+  .sat-card.active { border-color: var(--amber); background: var(--amber-dim); }
+  .sat-card .name { font-weight: 700; font-size: 0.92rem; margin-bottom: 6px; }
+  .sat-card .grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 3px 10px;
+    font-size: 0.74rem;
+  }
+  .sat-card .grid .k { color: var(--muted); }
+  .sat-card .grid .v { text-align: right; }
+
+  .passes { margin-top: 18px; }
+  .passes table { width: 100%; border-collapse: collapse; font-size: 0.74rem; }
+  .passes th {
+    text-align: left; color: var(--muted); font-weight: 500;
+    padding: 4px 6px; border-bottom: 1px solid var(--panel-edge);
+  }
+  .passes td { padding: 5px 6px; border-bottom: 1px solid rgba(35,44,92,0.5); }
+  .passes .el { color: var(--amber); text-align: right; }
+  .loc-row { display: flex; gap: 8px; align-items: center; margin: 6px 4px 10px; font-size: 0.76rem; color: var(--muted); }
+  .loc-row button {
+    background: none; border: 1px solid var(--panel-edge); color: var(--text);
+    border-radius: 6px; padding: 3px 10px; font: inherit; cursor: pointer;
+  }
+  .loc-row button:hover { border-color: var(--amber); color: var(--amber); }
+
+  #map { height: 100%; background: #0a0f24; }
+  .leaflet-container { font: inherit; }
+  .sat-label {
+    background: rgba(14, 20, 48, 0.85); border: 1px solid var(--panel-edge);
+    color: var(--text); border-radius: 4px; padding: 1px 6px;
+    font-family: "IBM Plex Mono", monospace; font-size: 10px; white-space: nowrap;
+  }
+  #status {
+    padding: 8px 14px; font-size: 0.78rem; color: var(--muted);
+  }
+  #status.error { color: #ff8a8a; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>ASTS <span>Constellation Tracker</span></h1>
+  <div class="sub">AST SpaceMobile · BlueWalker 3 + BlueBird block 1 · live orbital telemetry</div>
+  <div id="clock" class="mono">—</div>
+</header>
+
+<div class="layout">
+  <aside class="rail">
+    <div id="status">Fetching orbital elements from CelesTrak…</div>
+    <h2>Spacecraft</h2>
+    <div id="sat-list"></div>
+
+    <div class="passes">
+      <h2>Next passes overhead (48 h, &gt;10° elevation)</h2>
+      <div class="loc-row">
+        <span id="loc-label">Observer: Dallas, TX</span>
+        <button id="use-my-location" type="button">Use my location</button>
+      </div>
+      <table>
+        <thead><tr><th>Satellite</th><th>Rise (local)</th><th>Dur.</th><th class="el">Max el.</th></tr></thead>
+        <tbody id="pass-body"><tr><td colspan="4" style="color:var(--muted)">Computing…</td></tr></tbody>
+      </table>
+    </div>
+  </aside>
+
+  <div id="map"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/satellite.js@5.0.0/dist/satellite.min.js"></script>
+<script>
+const TLE_SOURCES = [
+  "https://celestrak.org/NORAD/elements/gp.php?NAME=BLUEWALKER&FORMAT=tle",
+  "https://celestrak.org/NORAD/elements/gp.php?NAME=BLUEBIRD&FORMAT=tle",
+];
+const COLORS = ["#ffb454", "#5fd4f4", "#6fe3a5", "#f48fb1", "#b39dff", "#ffd866", "#7adfd0"];
+let observer = { lat: 32.7767, lon: -96.797, name: "Dallas, TX" };
+let sats = [];          // { name, satrec, color, marker, track, card }
+let activeIdx = -1;
+
+const map = L.map("map", { worldCopyJump: true, zoomControl: true }).setView([20, -60], 3);
+L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+  attribution: '&copy; OpenStreetMap &copy; CARTO', subdomains: "abcd", maxZoom: 8,
+}).addTo(map);
+
+let observerMarker = L.circleMarker([observer.lat, observer.lon], {
+  radius: 5, color: "#ffffff", weight: 1.5, fillColor: "#ffffff", fillOpacity: 0.6,
+}).addTo(map).bindTooltip("Observer", { className: "sat-label" });
+
+function setStatus(msg, isError) {
+  const el = document.getElementById("status");
+  el.textContent = msg;
+  el.className = isError ? "error" : "";
+}
+
+async function loadTLEs() {
+  const lines = [];
+  for (const url of TLE_SOURCES) {
+    try {
+      const r = await fetch(url);
+      if (r.ok) lines.push(...(await r.text()).split("\n"));
+    } catch (e) { console.warn("TLE fetch failed:", url, e); }
+  }
+  const parsed = [];
+  for (let i = 0; i < lines.length - 2; i++) {
+    const name = lines[i].trim();
+    if (lines[i + 1]?.startsWith("1 ") && lines[i + 2]?.startsWith("2 ")) {
+      parsed.push({ name, l1: lines[i + 1].trim(), l2: lines[i + 2].trim() });
+      i += 2;
+    }
+  }
+  return parsed;
+}
+
+function buildSat(tle, idx) {
+  const satrec = satellite.twoline2satrec(tle.l1, tle.l2);
+  const color = COLORS[idx % COLORS.length];
+  const marker = L.circleMarker([0, 0], {
+    radius: 6, color, weight: 2, fillColor: color, fillOpacity: 0.9,
+  }).addTo(map).bindTooltip(tle.name, { permanent: true, direction: "right", offset: [8, 0], className: "sat-label" });
+  marker.on("click", () => focusSat(idx));
+  const track = L.polyline([], { color, weight: 1.2, opacity: 0.55, dashArray: "4 5" }).addTo(map);
+  return { name: tle.name, satrec, color, marker, track };
+}
+
+function geodetic(satrec, date) {
+  const pv = satellite.propagate(satrec, date);
+  if (!pv.position) return null;
+  const gmst = satellite.gstime(date);
+  const gd = satellite.eciToGeodetic(pv.position, gmst);
+  const v = pv.velocity;
+  return {
+    lat: satellite.degreesLat(gd.latitude),
+    lon: satellite.degreesLong(gd.longitude),
+    altKm: gd.height,
+    velKms: v ? Math.hypot(v.x, v.y, v.z) : null,
+    posEcf: satellite.eciToEcf(pv.position, gmst),
+  };
+}
+
+function updateGroundTrack(sat) {
+  // ~one orbit: 50 min behind to 50 min ahead, split at the antimeridian
+  const segs = [[]];
+  const now = Date.now();
+  let prevLon = null;
+  for (let m = -50; m <= 50; m += 1) {
+    const g = geodetic(sat.satrec, new Date(now + m * 60000));
+    if (!g) continue;
+    if (prevLon !== null && Math.abs(g.lon - prevLon) > 180) segs.push([]);
+    segs[segs.length - 1].push([g.lat, g.lon]);
+    prevLon = g.lon;
+  }
+  sat.track.setLatLngs(segs);
+}
+
+function renderCards() {
+  const list = document.getElementById("sat-list");
+  list.innerHTML = "";
+  sats.forEach((sat, i) => {
+    const card = document.createElement("div");
+    card.className = "sat-card";
+    card.style.setProperty("--sat-color", sat.color);
+    card.tabIndex = 0;
+    card.innerHTML = `
+      <div class="name">${sat.name}</div>
+      <div class="grid mono">
+        <span class="k">LAT</span><span class="v" data-f="lat">—</span>
+        <span class="k">LON</span><span class="v" data-f="lon">—</span>
+        <span class="k">ALT</span><span class="v" data-f="alt">—</span>
+        <span class="k">VEL</span><span class="v" data-f="vel">—</span>
+      </div>`;
+    card.addEventListener("click", () => focusSat(i));
+    card.addEventListener("keydown", e => { if (e.key === "Enter") focusSat(i); });
+    list.appendChild(card);
+    sat.card = card;
+  });
+}
+
+function focusSat(i) {
+  activeIdx = i;
+  sats.forEach((s, j) => s.card.classList.toggle("active", j === i));
+  const g = geodetic(sats[i].satrec, new Date());
+  if (g) map.setView([g.lat, g.lon], Math.max(map.getZoom(), 4));
+}
+
+function tick() {
+  const now = new Date();
+  document.getElementById("clock").textContent = now.toISOString().replace("T", " ").slice(0, 19) + " UTC";
+  sats.forEach(sat => {
+    const g = geodetic(sat.satrec, now);
+    if (!g) return;
+    sat.marker.setLatLng([g.lat, g.lon]);
+    const q = s => sat.card.querySelector(`[data-f="${s}"]`);
+    q("lat").textContent = g.lat.toFixed(2) + "°";
+    q("lon").textContent = g.lon.toFixed(2) + "°";
+    q("alt").textContent = g.altKm.toFixed(0) + " km";
+    q("vel").textContent = g.velKms ? g.velKms.toFixed(2) + " km/s" : "—";
+  });
+}
+
+function computePasses() {
+  const body = document.getElementById("pass-body");
+  body.innerHTML = `<tr><td colspan="4" style="color:var(--muted)">Computing…</td></tr>`;
+  const obsGd = {
+    latitude: satellite.degreesToRadians(observer.lat),
+    longitude: satellite.degreesToRadians(observer.lon),
+    height: 0.15,
+  };
+  const passes = [];
+  const stepMs = 30000, start = Date.now(), end = start + 48 * 3600 * 1000;
+  sats.forEach(sat => {
+    let inPass = false, rise = null, maxEl = 0;
+    for (let t = start; t <= end; t += stepMs) {
+      const date = new Date(t);
+      const pv = satellite.propagate(sat.satrec, date);
+      if (!pv.position) continue;
+      const gmst = satellite.gstime(date);
+      const ecf = satellite.eciToEcf(pv.position, gmst);
+      const el = satellite.radiansToDegrees(satellite.ecfToLookAngles(obsGd, ecf).elevation);
+      if (el > 10 && !inPass) { inPass = true; rise = t; maxEl = el; }
+      else if (el > 10 && inPass) { maxEl = Math.max(maxEl, el); }
+      else if (el <= 10 && inPass) {
+        passes.push({ sat: sat.name, color: sat.color, rise, durMin: (t - rise) / 60000, maxEl });
+        inPass = false;
+      }
+    }
+  });
+  passes.sort((a, b) => a.rise - b.rise);
+  if (!passes.length) {
+    body.innerHTML = `<tr><td colspan="4" style="color:var(--muted)">No passes above 10° in the next 48 h.</td></tr>`;
+    return;
+  }
+  body.innerHTML = passes.slice(0, 14).map(p => `
+    <tr>
+      <td style="color:${p.color}">${p.sat.replace("BLUEBIRD", "BB").replace("BLUEWALKER", "BW")}</td>
+      <td class="mono">${new Date(p.rise).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}</td>
+      <td class="mono">${p.durMin.toFixed(0)} min</td>
+      <td class="el mono">${p.maxEl.toFixed(0)}°</td>
+    </tr>`).join("");
+}
+
+document.getElementById("use-my-location").addEventListener("click", () => {
+  if (!navigator.geolocation) return;
+  navigator.geolocation.getCurrentPosition(pos => {
+    observer = { lat: pos.coords.latitude, lon: pos.coords.longitude, name: "your location" };
+    document.getElementById("loc-label").textContent =
+      `Observer: ${observer.lat.toFixed(2)}°, ${observer.lon.toFixed(2)}°`;
+    observerMarker.setLatLng([observer.lat, observer.lon]);
+    computePasses();
+  }, () => setStatus("Location permission denied — using Dallas, TX.", false));
+});
+
+(async function init() {
+  try {
+    const tles = await loadTLEs();
+    if (!tles.length) {
+      setStatus("Could not load orbital data from CelesTrak. It may be rate-limiting — refresh in a couple of hours.", true);
+      return;
+    }
+    sats = tles.map(buildSat);
+    renderCards();
+    setStatus(`Tracking ${sats.length} spacecraft · TLEs from CelesTrak · positions via SGP4`);
+    sats.forEach(updateGroundTrack);
+    setInterval(() => sats.forEach(updateGroundTrack), 5 * 60 * 1000);
+    tick();
+    setInterval(tick, 1000);
+    setTimeout(computePasses, 50);
+    setInterval(computePasses, 30 * 60 * 1000);
+  } catch (e) {
+    setStatus("Initialization failed: " + e.message, true);
+  }
+})();
+</script>
+</body>
+</html>
