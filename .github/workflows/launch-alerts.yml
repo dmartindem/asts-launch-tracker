@@ -1,0 +1,41 @@
+name: Launch alerts (every 6 hours)
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"   # 00:00, 06:00, 12:00, 18:00 UTC
+  workflow_dispatch: {}      # allow manual runs from the Actions tab
+
+permissions:
+  contents: write            # needed to commit the notified.json state file
+
+concurrency:
+  group: launch-alerts
+  cancel-in-progress: false
+
+jobs:
+  alert:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check for launches and send alerts
+        env:
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          ALERT_RECIPIENT: ${{ secrets.ALERT_RECIPIENT }}
+        run: python scripts/launch_alerts.py
+
+      - name: Commit updated alert state
+        run: |
+          git config user.name "launch-bot"
+          git config user.email "actions@github.com"
+          git add state/notified.json
+          git diff --cached --quiet || git commit -m "Update notified launch state [skip ci]"
+          git push

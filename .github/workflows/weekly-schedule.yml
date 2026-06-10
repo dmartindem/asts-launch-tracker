@@ -1,0 +1,26 @@
+name: Weekly launch schedule (Monday)
+
+on:
+  schedule:
+    - cron: "0 13 * * 1"     # Mondays 13:00 UTC = 8:00 AM Central (CDT)
+  workflow_dispatch: {}
+
+jobs:
+  schedule-email:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Send weekly schedule email
+        env:
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          ALERT_RECIPIENT: ${{ secrets.ALERT_RECIPIENT }}
+        run: python scripts/weekly_schedule.py
